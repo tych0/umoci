@@ -47,13 +47,6 @@ commands.`,
 func initLayout(ctx *cli.Context) error {
 	imagePath := ctx.App.Metadata["--image-path"].(string)
 
-	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
-		if err == nil {
-			err = fmt.Errorf("path already exists: %s", imagePath)
-		}
-		return errors.Wrap(err, "image layout creation")
-	}
-
 	if err := dir.Create(imagePath); err != nil {
 		return errors.Wrap(err, "image layout creation")
 	}
