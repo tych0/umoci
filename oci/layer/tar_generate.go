@@ -126,12 +126,8 @@ func normalise(rawPath string, isDir bool) (string, error) {
 // the relevant stat information about the file, and also attempts to track
 // hardlinks. This should be functionally equivalent to adding entries with GNU
 // tar.
-func (tg *tarGenerator) AddFile(name, path string) error {
-	fi, err := tg.fsEval.Lstat(path)
-	if err != nil {
-		return errors.Wrap(err, "add file lstat")
-	}
-
+func (tg *tarGenerator) AddFile(name, path string, fi os.FileInfo) error {
+	var err error
 	linkname := ""
 	if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
 		if linkname, err = tg.fsEval.Readlink(path); err != nil {

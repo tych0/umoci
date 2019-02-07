@@ -68,7 +68,11 @@ func TestTarGenerateAddFileNormal(t *testing.T) {
 	// Create all of the tar entries in a goroutine so we can parse the tar
 	// entries as they're generated (io.Pipe pipes are unbuffered).
 	go func() {
-		if err := tg.AddFile(file, path); err != nil {
+		fi, err := tg.fsEval.Lstat(path)
+		if err != nil {
+			t.Errorf("Stat: %s: unexpected error: %s", path, err)
+		}
+		if err := tg.AddFile(file, path, fi); err != nil {
 			t.Errorf("AddFile: %s: unexpected error: %s", path, err)
 		}
 		if err := tg.tw.Close(); err != nil {
@@ -162,7 +166,11 @@ func TestTarGenerateAddFileDirectory(t *testing.T) {
 	// Create all of the tar entries in a goroutine so we can parse the tar
 	// entries as they're generated (io.Pipe pipes are unbuffered).
 	go func() {
-		if err := tg.AddFile(file, path); err != nil {
+		fi, err := tg.fsEval.Lstat(path)
+		if err != nil {
+			t.Errorf("Stat: %s: unexpected error: %s", path, err)
+		}
+		if err := tg.AddFile(file, path, fi); err != nil {
 			t.Errorf("AddFile: %s: unexpected error: %s", path, err)
 		}
 		if err := tg.tw.Close(); err != nil {
@@ -249,7 +257,11 @@ func TestTarGenerateAddFileSymlink(t *testing.T) {
 	// Create all of the tar entries in a goroutine so we can parse the tar
 	// entries as they're generated (io.Pipe pipes are unbuffered).
 	go func() {
-		if err := tg.AddFile(file, path); err != nil {
+		fi, err := tg.fsEval.Lstat(path)
+		if err != nil {
+			t.Errorf("Stat: %s: unexpected error: %s", path, err)
+		}
+		if err := tg.AddFile(file, path, fi); err != nil {
 			t.Errorf("AddFile: %s: unexpected error: %s", path, err)
 		}
 		if err := tg.tw.Close(); err != nil {

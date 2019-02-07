@@ -38,30 +38,58 @@ func (ids inodeDeltas) Len() int           { return len(ids) }
 func (ids inodeDeltas) Less(i, j int) bool { return ids[i].Path() < ids[j].Path() }
 func (ids inodeDeltas) Swap(i, j int)      { ids[i], ids[j] = ids[j], ids[i] }
 
-// GenerateLayer creates a new OCI diff layer based on the mtree diff provided.
+type writeCounter struct {
+	written uint64
+}
+
+func (wc *writeCounter) Write(p []byte) (n int, err error) {
+	n = len(p)
+	wc.written += uint64(n)
+	return n, nil
+}
+
+// GenerateLayer is equivalent to GenerateLayers() with the last arugment set
+// to zero, i.e. only generate one layer of maximum size.
+func GenerateLayer(path string, deltas []mtree.InodeDelta, opt *MapOptions) (io.ReadCloser, error) {
+	ch, err := GenerateLayers(path, deltas, opt, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	reader := <-ch
+	return reader, nil
+}
+
+// GenerateLayers creates a new OCI diff layer based on the mtree diff provided.
 // All of the mtree.Modified and mtree.Extra blobs are read relative to the
 // provided path (which should be the rootfs of the layer that was diffed). The
 // returned reader is for the *raw* tar data, it is the caller's responsibility
 // to gzip it.
-func GenerateLayer(path string, deltas []mtree.InodeDelta, opt *MapOptions) (io.ReadCloser, error) {
+func GenerateLayers(path string, deltas []mtree.InodeDelta, opt *MapOptions, maxLayerBytes uint64) (<-chan io.ReadCloser, error) {
 	var mapOptions MapOptions
 	if opt != nil {
 		mapOptions = *opt
 	}
 
-	reader, writer := io.Pipe()
+	ch := make(chan io.ReadCloser, 1)
 
 	go func() (Err error) {
+		reader, writer := io.Pipe()
+		counter := &writeCounter{}
+		both := io.MultiWriter(counter, writer)
+		ch <- reader
+
 		// Close with the returned error.
 		defer func() {
 			// #nosec G104
 			_ = writer.CloseWithError(errors.Wrap(Err, "generate layer"))
+			close(ch)
 		}()
 
 		// We can't just dump all of the file contents into a tar file. We need
 		// to emulate a proper tar generator. Luckily there aren't that many
 		// things to emulate (and we can do them all in tar.go).
-		tg := newTarGenerator(writer, mapOptions)
+		tg := newTarGenerator(both, mapOptions)
 
 		// Sort the delta paths.
 		// FIXME: We need to add whiteouts first, otherwise we might end up
@@ -79,11 +107,46 @@ func GenerateLayer(path string, deltas []mtree.InodeDelta, opt *MapOptions) (io.
 
 			switch delta.Type() {
 			case mtree.Modified, mtree.Extra:
-				if err := tg.AddFile(name, fullPath); err != nil {
+				fi, err := tg.fsEval.Lstat(fullPath)
+				if err != nil {
+					return errors.Wrap(err, "add file lstat")
+				}
+
+				// Check to see if adding this file will make
+				// the layer too big. We take the current
+				// number of bytes the layer has + the size of
+				// the file data, + 1000 bytes to allow for the
+				// header size.
+				//
+				// https://en.wikipedia.org/wiki/Tar_(computing)#Header
+				// outlines that the various header sizes range
+				// between 300 and just over 500 bytes, so
+				// let's pick 1000 because that should be
+				// enough for anybody.
+				if maxLayerBytes > 0 && counter.written+uint64(fi.Size())+1000 > maxLayerBytes {
+					tg.tw.Close()
+					writer.Close()
+					reader, writer = io.Pipe()
+					counter.written = 0
+					both = io.MultiWriter(counter, writer)
+					tg = newTarGenerator(both, mapOptions)
+					ch <- reader
+				}
+
+				if err := tg.AddFile(name, fullPath, fi); err != nil {
 					log.Warnf("generate layer: could not add file '%s': %s", name, err)
 					return errors.Wrap(err, "generate layer file")
 				}
 			case mtree.Missing:
+				if maxLayerBytes > 0 && counter.written+1000 > maxLayerBytes {
+					tg.tw.Close()
+					writer.Close()
+					reader, writer = io.Pipe()
+					counter.written = 0
+					both = io.MultiWriter(counter, writer)
+					tg = newTarGenerator(both, mapOptions)
+					ch <- reader
+				}
 				if err := tg.AddWhiteout(name); err != nil {
 					log.Warnf("generate layer: could not add whiteout '%s': %s", name, err)
 					return errors.Wrap(err, "generate whiteout layer file")
@@ -99,7 +162,7 @@ func GenerateLayer(path string, deltas []mtree.InodeDelta, opt *MapOptions) (io.
 		return nil
 	}()
 
-	return reader, nil
+	return ch, nil
 }
 
 // GenerateInsertLayer generates a completely new layer from "root"to be
@@ -137,7 +200,7 @@ func GenerateInsertLayer(root string, target string, opaque bool, opt *MapOption
 			}
 
 			pathInTar := path.Join(target, curPath[len(root):])
-			return tg.AddFile(pathInTar, curPath)
+			return tg.AddFile(pathInTar, curPath, info)
 		})
 	}()
 	return reader
