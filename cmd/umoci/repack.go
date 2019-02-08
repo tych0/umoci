@@ -171,5 +171,5 @@ func repack(ctx *cli.Context) error {
 		}
 	}
 
-	return umoci.Repack(engineExt, tagName, bundlePath, meta, history, maskedPaths, ctx.Bool("refresh-bundle"), mutator)
+	return umoci.Repack(engineExt, tagName, bundlePath, meta, history, maskedPaths, ctx.Bool("refresh-bundle"), mutator, 0)
 }

@@ -19,7 +19,7 @@ import (
 
 // Repack repacks a bundle into an image adding a new layer for the changed
 // data in the bundle.
-func Repack(engineExt casext.Engine, tagName string, bundlePath string, meta Meta, history *ispec.History, maskedPaths []string, refreshBundle bool, mutator *mutate.Mutator) error {
+func Repack(engineExt casext.Engine, tagName string, bundlePath string, meta Meta, history *ispec.History, maskedPaths []string, refreshBundle bool, mutator *mutate.Mutator, maxLayerBytes uint64) error {
 	mtreeName := strings.Replace(meta.From.Descriptor().Digest.String(), ":", "_", 1)
 	mtreePath := filepath.Join(bundlePath, mtreeName+".mtree")
 	fullRootfsPath := filepath.Join(bundlePath, layer.RootfsName)
@@ -65,16 +65,24 @@ func Repack(engineExt casext.Engine, tagName string, bundlePath string, meta Met
 		mtreefilter.MaskFilter(maskedPaths),
 		mtreefilter.SimplifyFilter(diffs))
 
-	reader, err := layer.GenerateLayer(fullRootfsPath, diffs, &meta.MapOptions)
+	ch, err := layer.GenerateLayers(fullRootfsPath, diffs, &meta.MapOptions, maxLayerBytes)
 	if err != nil {
 		return errors.Wrap(err, "generate diff layer")
 	}
-	defer reader.Close()
 
-	// TODO: We should add a flag to allow for a new layer to be made
-	//       non-distributable.
-	if err := mutator.Add(context.Background(), reader, history); err != nil {
-		return errors.Wrap(err, "add diff layer")
+	for {
+		reader, ok := <-ch
+		if !ok {
+			break
+		}
+
+		// TODO: We should add a flag to allow for a new layer to be made
+		//       non-distributable.
+		err := mutator.Add(context.Background(), reader, history);
+		reader.Close()
+		if err != nil {
+			return errors.Wrap(err, "add diff layer")
+		}
 	}
 
 	newDescriptorPath, err := mutator.Commit(context.Background())
